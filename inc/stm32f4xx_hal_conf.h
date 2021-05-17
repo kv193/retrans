@@ -48,7 +48,7 @@
 #define HAL_RCC_MODULE_ENABLED 
 /* #define HAL_RNG_MODULE_ENABLED    */
 /* #define HAL_RTC_MODULE_ENABLED */
-/* #define HAL_SAI_MODULE_ENABLED    */
+#define HAL_SAI_MODULE_ENABLED
 /* #define HAL_SD_MODULE_ENABLED   */
 /* #define HAL_SPI_MODULE_ENABLED    */
 #define HAL_TIM_MODULE_ENABLED

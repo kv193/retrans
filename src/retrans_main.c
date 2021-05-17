@@ -13,9 +13,9 @@
 #include "FreeRTOS_CLI.h"
 #include "kvreturns.h"
 #include "stamen_bsp.h"
-#include "kvgnrl.h"
 #include "config.h"
-#include "FreeRTOS_IO.h"
+#include "kvgnrl.h"
+//#include "FreeRTOS_IO.h"
 #include "afe.h"
 #include "stm32f4xx_ll_cortex.h"
 
@@ -31,7 +31,7 @@
 
 /* Private variables ---------------------------------------------------------*/
 osThreadId ThreadLEDHandle, ThreadLED2Handle, ThreadCLIHandle, ThreadDSPHandle;
-int LED1_Delay = 1500, LED2_Delay = 100, LED_Delays[LEDn] = {750, 1500};
+int LED1_Delay = 500, LED2_Delay = 100, LED_Delays[LEDn] = {750, 1500};
 UART_HandleTypeDef Uart_Std;
 static const char *pcWelcomeMessage =
 "FreeRTOS command server.\r\nType Help to view a list of registered commands.\r\n>";
@@ -138,9 +138,9 @@ static void vDspTask(void const *pvPars)
 /*******************************************************************************
  * @brief Console task for CLI.
  ******************************************************************************/
-static void vConsoleTask(void const *pvParameters)
+static void vConsoleTask(const void* pvParameters)
 {
-	Peripheral_Descriptor_t xConsole = (Peripheral_Descriptor_t)pvParameters;
+	void *xConsole = (void*)pvParameters;
 	int8_t cRxedChar, cInputIndex = 0;
 	BaseType_t xMoreDataToFollow;
 	static char 	pcOutputString[MAX_OUTPUT_LENGTH],
@@ -150,44 +150,45 @@ static void vConsoleTask(void const *pvParameters)
 	bsp_Console_Init(&Uart_Std);
 	copyright();
 
-	FreeRTOS_write(xConsole, pcWelcomeMessage, strlen( pcWelcomeMessage));
-	for( ;; ) {
-		while (0 == FreeRTOS_read(xConsole, &cRxedChar, sizeof(cRxedChar))) {
-			//HAL_Delay(20);
-		}
-		if (strncmp(pcInputString, "\x1b\x41", 2) == 0) {
-			strcpy(pcInputString, OldCommand);
-			cInputIndex = strlen(pcInputString);
-			FreeRTOS_write(xConsole, pcInputString, strlen(pcInputString));
-		}
-		if (cRxedChar == '\n' || cRxedChar == '\r') {
-			FreeRTOS_write(xConsole, "\r\n", strlen("\r\n"));
-			strcpy(OldCommand, pcInputString);
-			do {
-				xMoreDataToFollow = FreeRTOS_CLIProcessCommand (
-					pcInputString,   /* The command string.*/
-					pcOutputString,  /* The output buffer. */
-					MAX_OUTPUT_LENGTH/* The size of the output buffer. */
-				);
-				FreeRTOS_write(xConsole, pcOutputString, strlen(pcOutputString));
-			} while( xMoreDataToFollow != pdFALSE );
-			cInputIndex = 0;
-			memset( pcInputString, 0x00, MAX_INPUT_LENGTH );
-			FreeRTOS_write(xConsole, ">", strlen(">"));
-		} else if (cRxedChar == '\b') {
-			if (cInputIndex > 0) {
-				cInputIndex--;
-				pcInputString[cInputIndex] = '\0';
-				FreeRTOS_write(xConsole, "\b\x20\b", strlen("\b\x20\b"));
-			}
-		} else if (cRxedChar == ARROW_UP) {
-			printf("Arrow Up key is pressed.");
-		} else if (cInputIndex < MAX_INPUT_LENGTH) {
-					pcInputString[ cInputIndex ] = cRxedChar;
-					FreeRTOS_write(xConsole, pcInputString + cInputIndex, sizeof(char));
-					cInputIndex++;
-		}
+	bsp_Console_Write(xConsole, pcWelcomeMessage, strlen( pcWelcomeMessage));
+
+    for( ;; ) {
+	while (0 == bsp_Console_Read/*FreeRTOS_read*/(xConsole, &cRxedChar, sizeof(cRxedChar))) {
 	}
+	if (cRxedChar == '\n' || cRxedChar == '\r') {
+		bsp_Console_Write(xConsole, "\r\n", strlen("\r\n"));
+		strcpy(OldCommand, pcInputString);
+		do {
+			xMoreDataToFollow = FreeRTOS_CLIProcessCommand (
+				pcInputString,   /* The command string.*/
+				pcOutputString,  /* The output buffer. */
+				MAX_OUTPUT_LENGTH/* The size of the output buffer. */
+			);
+			bsp_Console_Write(xConsole, pcOutputString, strlen(pcOutputString));
+		} while( xMoreDataToFollow != pdFALSE );
+		cInputIndex = 0;
+		memset( pcInputString, 0x00, MAX_INPUT_LENGTH );
+		bsp_Console_Write(xConsole, ">", strlen(">"));
+	} else if (cRxedChar == '\b') {
+		if (cInputIndex > 0) {
+			cInputIndex--;
+			pcInputString[cInputIndex] = '\0';
+			bsp_Console_Write(xConsole, "\b\x20\b", strlen("\b\x20\b"));
+		}
+	} else if (cInputIndex < MAX_INPUT_LENGTH) {
+		pcInputString[cInputIndex] = cRxedChar;
+		cInputIndex++;
+		//bsp_Console_Write(xConsole, pcInputString + cInputIndex, sizeof(char));
+		if (pcInputString[0] != 0x1b)
+			bsp_Console_Write(xConsole, &cRxedChar, sizeof(char));
+	}
+	if (strncmp(pcInputString, "\x1b\x5b\x41", 3) == 0) {
+		strcpy(pcInputString, OldCommand);
+		cInputIndex = strlen(pcInputString);
+		bsp_Console_Write(xConsole, pcInputString,
+				strlen(pcInputString));
+	}
+    }
 }
 
 /******************************************************************************
@@ -213,12 +214,12 @@ static void CLI_Init()
  ******************************************************************************/
 int config_timer_for_stat()
 {
-	function_empty;
+	//FUNCTION_EMPTY(__func__);
 	return KVOK;
 }
 int get_run_time_counter_value()
 {
-	function_empty_once;
+	//FUNCTION_EMPTY(__func__);
 	return HAL_GetTick();
 }
 
@@ -244,6 +245,7 @@ int main(void)
 	osThreadDef(LED, vLedsTask, osPriorityNormal, 0, configMINIMAL_STACK_SIZE);
 	osThreadDef(CLI, vConsoleTask, osPriorityNormal, 0, configMINIMAL_STACK_SIZE);
 	osThreadDef(DSP, vDspTask, osPriorityNormal, 0, configMINIMAL_STACK_SIZE);
+
 	ThreadLEDHandle = osThreadCreate(osThread(LED), NULL);
 	ThreadCLIHandle = osThreadCreate(osThread(CLI), (void*)&Uart_Std);
 	ThreadDSPHandle = osThreadCreate(osThread(DSP), NULL);

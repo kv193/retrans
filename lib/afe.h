@@ -8,6 +8,8 @@
 #ifndef AFE_H_
 #define AFE_H_
 
+#include "stdint.h"
+
 typedef struct _afe_info_struct {
 	int16_t signal_len;
 	int16_t out_qty;

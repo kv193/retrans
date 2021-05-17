@@ -60,52 +60,6 @@
 /** @defgroup HAL_MSP_Private_Functions HAL MSP Private Functions
   * @{
   */
-/******************************************************************************
- * @brief UART MSP Initialization
- *        This function configures the hardware resources used in this example:
- *           - Peripheral's clock enable
- *           - Peripheral's GPIO Configuration
- * @param huart: UART handle pointer
- * @retval None
- ******************************************************************************/
-void HAL_UART_MspInit(UART_HandleTypeDef *huart)
-{
-	GPIO_InitTypeDef  GPIO_InitStruct;
-
-	if (huart->Instance == USART1) {
-		USART1_TX_GPIO_CLK_ENABLE();
-		USART1_RX_GPIO_CLK_ENABLE();
-		USART1_CLK_ENABLE();
-
-		GPIO_InitStruct.Pin       = USART1_TX_PIN;
-		GPIO_InitStruct.Mode      = GPIO_MODE_AF_PP;
-		GPIO_InitStruct.Pull      = GPIO_PULLUP;
-		GPIO_InitStruct.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
-		GPIO_InitStruct.Alternate = USART1_TX_AF;
-		HAL_GPIO_Init(USART1_TX_GPIO_PORT, &GPIO_InitStruct);
-
-		GPIO_InitStruct.Pin = USART1_RX_PIN;
-		GPIO_InitStruct.Alternate = USART1_RX_AF;
-		HAL_GPIO_Init(USART1_RX_GPIO_PORT, &GPIO_InitStruct);
-	} else if (huart->Instance == USART2) {
-		USART2_TX_GPIO_CLK_ENABLE();
-		USART2_RX_GPIO_CLK_ENABLE();
-		USART2_CLK_ENABLE();
-
-		GPIO_InitStruct.Pin       = USART2_TX_PIN;
-		GPIO_InitStruct.Mode      = GPIO_MODE_AF_PP;
-		GPIO_InitStruct.Pull      = GPIO_PULLUP;
-		GPIO_InitStruct.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
-		GPIO_InitStruct.Alternate = USART2_TX_AF;
-		HAL_GPIO_Init(USART2_TX_GPIO_PORT, &GPIO_InitStruct);
-
-		GPIO_InitStruct.Pin = USART2_RX_PIN;
-		GPIO_InitStruct.Alternate = USART2_RX_AF;
-		HAL_GPIO_Init(USART2_RX_GPIO_PORT, &GPIO_InitStruct);
-	}
-
-}
-
 /**
   * @brief  Initializes the Global MSP.
   * @note   This function is called from HAL_Init() function to perform system

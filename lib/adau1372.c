@@ -8,12 +8,12 @@
 /* Includes ------------------------------------------------------------------*/
 #include "string.h"
 #include "kvreturns.h"
-#include "kvgnrl.h"
 #include "afe.h"
 #include "adau1372.h"
 #include "FreeRTOS.h"
 #include "FreeRTOS_CLI.h"
 #include "stm32f4xx_hal.h"
+#include "kvgnrl.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -28,6 +28,21 @@
 
 #define I2C_CHIP_ADDR 0x7E
 #define I2C_DELAY 1
+
+#define SAI1_CLOCK_ENABLE()		__HAL_RCC_SAI1_CLK_ENABLE()
+#define SAI1_GPIO_CLK_ENABLE()		__HAL_RCC_GPIOE_CLK_ENABLE()
+#define SAI1_AF				GPIO_AF7_SAI1
+#define SAI1_AFRL_VALUE			(SAI1_AF << 2 * 4) | \
+					(SAI1_AF << 3 * 4) | \
+					(SAI1_AF << 4 * 4) | \
+					(SAI1_AF << 5 * 4) | \
+					(SAI1_AF << 6 * 4)
+#define SAI1_GPIO_PORT			GPIOE
+#define SAI1_MCLK_PIN			GPIO_PIN_2
+#define SAI1_SD_B_PIN			GPIO_PIN_3
+#define SAI1_SD_A_PIN			GPIO_PIN_4
+#define SAI1_SCK_PIN			GPIO_PIN_5
+#define SAI1_FS_PIN			GPIO_PIN_6
 
 /* Private macro -------------------------------------------------------------*/
 /*#define BIT(bit, data) ((data >> bit) & 1)
@@ -65,10 +80,54 @@
 		I2C_BIT_WR(BIT(0, byte));
 */
 /* Private variables ---------------------------------------------------------*/
+static uint8_t init_data[] = {
+		REG_CLK_CONTROL_ADDR,      0x00,
+		REG_PLL_CTRL0_ADDR,        0x03,
+		REG_PLL_CTRL1_ADDR,        0xe8,
+		REG_PLL_CTRL2_ADDR,        0x00,
+		REG_PLL_CTRL3_ADDR,        0x48,
+		REG_PLL_CTRL4_ADDR,        0x19,
+		REG_CLK_CONTROL_ADDR,      0x80,
+		REG_CLKOUT_SEL_ADDR,       0x01, // Wait for PLL lock instead read #6 reg.
+		REG_CLK_CONTROL_ADDR,      0x89,
+		REG_CLKOUT_SEL_ADDR,       0x01,
+
+		REG_MODE_MP6_ADDR,         0x12, // Clock output
+		REG_MODE_MP0_ADDR,         0x00, // Serial input  0
+		REG_MODE_MP1_ADDR,         0x00, // Serial output 0
+		REG_DECIM_PWR_MODES_ADDR,  0b11111111, //0xff,
+		REG_ADC_CONTROL0_ADDR,     0b00000000,
+		REG_ADC_CONTROL1_ADDR,     0b00000000,
+		REG_ADC_CONTROL2_ADDR,     0b00000011,
+		REG_ADC_CONTROL3_ADDR,     0b00000011,
+		REG_ASRC_MODE_ADDR,        0b00000011, // 0x03,
+		REG_ASRCO_SOURCE_0_1_ADDR, 0b01010100, // ADC1, ADC0
+		REG_ASRCO_SOURCE_2_3_ADDR, 0b01110110, // ADC3, ADC2
+
+		REG_INTERP_PWR_MODES_ADDR, 0x0f,
+		REG_DAC_SOURCE_0_1_ADDR,   0xdc,
+		REG_DAC_CONTROL1_ADDR,     0x03,
+		REG_OP_STAGE_CTRL_ADDR,    0x00,
+		REG_OP_STAGE_MUTES_ADDR,   0x00,
+		REG_SAI_0_ADDR,            0x61,
+		REG_SAI_1_ADDR,            0b01100101, /*//0x65,
+                                             |||||||+-- SAI_MS (master)
+			                     ||||||+--- BCLKEDGE
+			                     |||||+---- BCLKRATE
+			                     ||||+----- SAI_MSB
+			                     |||+------ LR_POL
+			                     ||+------- LR_MODE
+		             	             |+-------- BCLK_TDMC
+		             	             +--------- TDM_TS */
+};
+
 /* Private function prototypes -----------------------------------------------*/
 int i2c_write(int8_t chip_addr, int16_t reg_addr, int8_t data);
 int afe_reg_read(int addr, int *data);
 int afe_reg_write(int addr, int data);
+int afe_init(int cnt, uint8_t *data);
+int afe_register_commands();
+int sai_open();
 
 /* Private functions ---------------------------------------------------------*/
 /*******************************************************************************
@@ -301,25 +360,9 @@ BaseType_t cmd_afe_reg_write(char *pcWriteBuffer, size_t xWriteBufferLen, const 
 	addr = strtol(FreeRTOS_CLIGetParameter(pcCommandString, 1, &x), NULL, 16);
 	data = strtol(FreeRTOS_CLIGetParameter(pcCommandString, 2, &x), NULL, 16);
 	afe_reg_write(addr, data);
-/*	scl_wr(0);
-	scl_wr(1);
-	scl_wr(0);
-	scl_wr(1);
-	scl_wr(0);
-	scl_wr(1);
-	scl_wr(0);
-	scl_wr(1);
-	scl_wr(0);
-	scl_wr(1);
-	scl_wr(0);
-	scl_wr(1);
-	scl_wr(0);
-	scl_wr(1);
-	scl_wr(0);
-	scl_wr(1);
-*/
 	return pdFALSE;
 }
+
 
 /*******************************************************************************
  * @brief  Open AFE (analog front end), initialize it.
@@ -334,31 +377,10 @@ int afe_open(char* name)
 		return -KVERROR;
 	}
 
-	static const CLI_Command_Definition_t
-	afe_info_def = {
-		"afe-info",
-		"afe-info:\r\n Type info about afe chip.\r\n",
-		cmd_afe_info,
-		0
-	},
-	afe_reg_read_def = {
-		"afe-reg-rd",
-		"afe-reg-rd addr:\r\n Read data from register at addr (hex).\r\n",
-		cmd_afe_reg_read,
-		1
-	},
-	afe_reg_write_def = {
-		"afe-reg-wr",
-		"afe-reg-wr addr data:\r\n Write data to register at addr (hex).\r\n",
-		cmd_afe_reg_write,
-		2
-	};
-
-	FreeRTOS_CLIRegisterCommand(&afe_info_def);
-	FreeRTOS_CLIRegisterCommand(&afe_reg_read_def);
-	FreeRTOS_CLIRegisterCommand(&afe_reg_write_def);
-
 	i2c_open();
+	sai_open(); 	//(void) init_data;
+	afe_init(ARRAY_SIZE(init_data) / 2, init_data);
+	afe_register_commands();
 
 	return KVOK;
 }
@@ -369,7 +391,7 @@ int afe_open(char* name)
  ******************************************************************************/
 int afe_close()
 {
-	function_empty;
+	FUNCTION_EMPTY(__func__);
 	return KVOK;
 }
 
@@ -404,3 +426,102 @@ int afe_reg_write(int addr, int data)
 	return KVOK;
 }
 
+/*******************************************************************************
+ * @brief Initialize AFE.
+ * @param cnt  - qty of data pair to write.
+ * @param data - data buffer with pairs reg_addr & value.
+ * @return KV status.
+ ******************************************************************************/
+int afe_init(int cnt, uint8_t *data)
+{
+	for (int i = 0; i < cnt; i++) {
+		afe_reg_write(data[i * 2], data[i * 2 + 1]);
+	}
+	return KVOK;
+}
+
+/*******************************************************************************
+ * @brief  Register afe commands for CLI.
+ * @param  None.
+ * @retval KV status.
+ ******************************************************************************/
+int afe_register_commands()
+{
+
+	static const CLI_Command_Definition_t
+	afe_info_def = {
+		"afe-info",
+		"afe-info:\r\n Type info about afe chip.\r\n",
+		cmd_afe_info,
+		0
+	},
+	afe_reg_read_def = {
+		"afe-reg-rd",
+		"afe-reg-rd addr:\r\n Read data from register at addr (hex).\r\n",
+		cmd_afe_reg_read,
+		1
+	},
+	afe_reg_write_def = {
+		"afe-reg-wr",
+		"afe-reg-wr addr data:\r\n Write data to register at addr (hex).\r\n",
+		cmd_afe_reg_write,
+		2
+	};
+
+	FreeRTOS_CLIRegisterCommand(&afe_info_def);
+	FreeRTOS_CLIRegisterCommand(&afe_reg_read_def);
+	FreeRTOS_CLIRegisterCommand(&afe_reg_write_def);
+
+	return KVOK;
+}
+
+/*******************************************************************************
+ * @brief  Register afe commands for CLI.
+ * @param  None.
+ * @retval KV status.
+ ******************************************************************************/
+int sai_open()
+{
+
+	//SAI_HandleTypeDef _SAIHandle, *SAI_Handle = &_SAIHandle;
+	//SAI_Handle->Instance =
+	//HAL_SAI_Init
+	SAI1_GPIO_CLK_ENABLE();
+	SAI1_CLOCK_ENABLE();
+	GPIOE->MODER  |= 0b1010101010 << 2 * 2;		// Alt fun for PE2,3,4,5,6
+	GPIOE->AFR[0] |= SAI1_AFRL_VALUE;
+	SAI1_Block_A->CR1 = 0b00000000000000000000000001000011; // Block_A - rx
+	SAI1_Block_B->CR1 = 0b00000000000000000000010001000010; /* Block_B - tx
+	                      ||||||||||||| ||  ||||||||||||++-- MODE
+	                      ||||||||||||| ||  ||||||||||++---- PRTCFG
+	                      ||||||||||||| ||  |||||||+++------ DS (16 bit)
+	                      ||||||||||||| ||  ||||||+--------- LSBFIRST
+	                      ||||||||||||| ||  |||||+---------- CKSTR
+	                      ||||||||||||| ||  ||++------------ SYNCEN (async)
+	                      ||||||||||||| ||  |+-------------- MONO
+	                      ||||||||||||| ||  +--------------- OUTDRIV
+	                      ||||||||||||| |+------------------ SAIxEN
+	                      ||||||||||||| +------------------- DMAEN
+	                      ||||||||||||+--------------------- NODIV
+	                      ||||||||++++---------------------- MCKDIV
+	                      ++++++++-------------------------- Reserved (as well missed bits) */
+	SAI1_Block_A->FRCR = 0b00000000000001000000000000111111;
+	SAI1_Block_B->FRCR = 0b00000000000001000000000000111111;/*
+                               |||||||||||||||| |||||||++++++++-- FRL
+                               |||||||||||||||| +++++++---------- FSALL
+                               |||||||||||||||+------------------ FSDEF
+                               ||||||||||||||+------------------- FSPOL
+                               |||||||||||||+-------------------- FSOFF
+                               +++++++++++++--------------------- Reserved */
+	SAI1_Block_A->SLOTR = 0b00000000000011110000001101000000;
+	SAI1_Block_B->SLOTR = 0b00000000000000110000001101000000;/*
+	                        ||||||||||||||||    |||||| +++++-- FBOFF
+	                        ||||||||||||||||    ||||++-------- SLOTSZ
+	                        ||||||||||||||||    ++++---------- NBSLOT
+	                        ++++++++++++++++------------------ SLOTEN  */
+	SAI1_Block_A->CR1 |= SAI_xCR1_SAIEN;
+	SAI1_Block_B->CR1 |= SAI_xCR1_SAIEN;
+	SAI1_Block_B->DR = 0x5555;
+
+	return KVOK;
+}

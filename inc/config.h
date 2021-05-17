@@ -31,15 +31,16 @@
 #define SOFTWARE_NAME "Retrans"
 #define SOFTWARE_VERSION 0x0100
 
-#define CONFIG_SYS_ARCH 	cortex_m4
-#define CONFIG_SYS_CPU  	stm32f413vht
-#define CONFIG_SYS_COMP 	gcc
-#define CONFIG_SYS_OS 		linux
-#define CONFIG_SYS_BOARD 	stamen
+#define CONFIG_SYS_ARCH 	CORTEX_M4
+#define CONFIG_SYS_CPU  	STM32F413
+#define CONFIG_SYS_OS 		FREERTOS
+#define CONFIG_SYS_BOARD 	STAMEN
 #define CONFIG_SYS_PLD 		none
 
 #define FQUARTZ			16000000
 #define FHCLK			96000000
+#define CK_HSE			FQUARTZ
 
+#define __KVGNRL_VER		2
 #endif /* __CONFIG_H */
 
