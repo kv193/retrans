@@ -18,39 +18,45 @@
 //#include "FreeRTOS_IO.h"
 #include "afe.h"
 #include "stm32f4xx_ll_cortex.h"
+#include "adau1372.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
 #define MAX_INPUT_LENGTH    128
 #define MAX_OUTPUT_LENGTH   128
 #define ARROW_UP 0x39
+#define PROMPT ">"
 
 /* Private macro -------------------------------------------------------------*/
-#define _MAJ_(x) x>>8
-#define _MIN_(x) x & 0xff
 
 /* Private variables ---------------------------------------------------------*/
 osThreadId ThreadLEDHandle, ThreadLED2Handle, ThreadCLIHandle, ThreadDSPHandle;
 int LED1_Delay = 500, LED2_Delay = 100, LED_Delays[LEDn] = {750, 1500};
 UART_HandleTypeDef Uart_Std;
 static const char *pcWelcomeMessage =
-"FreeRTOS command server.\r\nType Help to view a list of registered commands.\r\n>";
+ENDL"FreeRTOS command server.\r\nType 'help' to view a list of registered commands."ENDL PROMPT;
 
 /* Private function prototypes -----------------------------------------------*/
 static void CLI_Init();
 static void vLedsTask(void const *argument);
 
 /*******************************************************************************
- * @brief Print copyright and brief info.
+ * @brief Print soft and hard  info.
+ ******************************************************************************/
+void board_info()
+{
+	printf("%s-%x.%x for %s-%x.%x, %s, %s"ENDL,
+		SOFTWARE_NAME, _MAJ_(SOFTWARE_VERSION), _MIN_(SOFTWARE_VERSION),
+		HARDWARE_NAME, _MAJ_(HARDWARE_VERSION), _MIN_(HARDWARE_VERSION),
+		__DATE__, __TIME__);
+}
+
+/*******************************************************************************
+ * @brief Print soft and hard  info.
  ******************************************************************************/
 void copyright()
 {
-	char *pch = "%s-%x.%x, (c) 2021 Techtrans, kv193@yandex.ru, %s, %s\r\n";
-	printf(pch,
-		SOFTWARE_NAME, _MAJ_(SOFTWARE_VERSION), _MIN_(SOFTWARE_VERSION),
-		__DATE__, __TIME__);
-	printf("Target hardware %s-%x.%x\r\n",
-		HARDWARE_NAME, _MAJ_(HARDWARE_VERSION), _MIN_(HARDWARE_VERSION));
+	printf("(c) 2021 Techtrans, kv193@yandex.ru"ENDL);
 }
 
 /* Private functions ---------------------------------------------------------*/
@@ -97,6 +103,7 @@ static BaseType_t prvCopyright(int8_t *pcWriteBuffer,
                                           size_t xWriteBufferLen,
                                           const int8_t *pcCommandString)
 {
+	board_info();
 	copyright();
 	pcWriteBuffer[0] = 0;
 	return pdFALSE;
@@ -140,55 +147,54 @@ static void vDspTask(void const *pvPars)
  ******************************************************************************/
 static void vConsoleTask(const void* pvParameters)
 {
-	void *xConsole = (void*)pvParameters;
-	int8_t cRxedChar, cInputIndex = 0;
-	BaseType_t xMoreDataToFollow;
-	static char 	pcOutputString[MAX_OUTPUT_LENGTH],
-			pcInputString[MAX_INPUT_LENGTH],
+	void 		*xConsole = (void*)pvParameters;
+	int8_t 		cRxedChar, input_index = 0;
+	BaseType_t 	xMoreDataToFollow;
+	static char   	output_str[MAX_OUTPUT_LENGTH],
+			input_str[MAX_INPUT_LENGTH],
 			OldCommand[MAX_INPUT_LENGTH];
-
-	bsp_Console_Init(&Uart_Std);
-	copyright();
 
 	bsp_Console_Write(xConsole, pcWelcomeMessage, strlen( pcWelcomeMessage));
 
-    for( ;; ) {
-	while (0 == bsp_Console_Read/*FreeRTOS_read*/(xConsole, &cRxedChar, sizeof(cRxedChar))) {
+	for( ;; ) {
+	while (0 == bsp_Console_Read(xConsole, &cRxedChar, sizeof(cRxedChar))) {
 	}
 	if (cRxedChar == '\n' || cRxedChar == '\r') {
 		bsp_Console_Write(xConsole, "\r\n", strlen("\r\n"));
-		strcpy(OldCommand, pcInputString);
-		do {
-			xMoreDataToFollow = FreeRTOS_CLIProcessCommand (
-				pcInputString,   /* The command string.*/
-				pcOutputString,  /* The output buffer. */
-				MAX_OUTPUT_LENGTH/* The size of the output buffer. */
-			);
-			bsp_Console_Write(xConsole, pcOutputString, strlen(pcOutputString));
-		} while( xMoreDataToFollow != pdFALSE );
-		cInputIndex = 0;
-		memset( pcInputString, 0x00, MAX_INPUT_LENGTH );
-		bsp_Console_Write(xConsole, ">", strlen(">"));
+		if (strlen(input_str) != 0) {
+			strcpy(OldCommand, input_str);
+			do {
+				xMoreDataToFollow = FreeRTOS_CLIProcessCommand (
+					input_str,   /* The command string.*/
+					output_str,  /* The output buffer. */
+					MAX_OUTPUT_LENGTH/* The size of the output buffer. */
+				);
+				bsp_Console_Write(xConsole, output_str, strlen(output_str));
+			} while( xMoreDataToFollow != pdFALSE );
+			input_index = 0;
+			memset( input_str, 0x00, MAX_INPUT_LENGTH );
+		}
+		bsp_Console_Write(xConsole, PROMPT, strlen(PROMPT));
 	} else if (cRxedChar == '\b') {
-		if (cInputIndex > 0) {
-			cInputIndex--;
-			pcInputString[cInputIndex] = '\0';
+		if (input_index > 0) {
+			input_index--;
+			input_str[input_index] = '\0';
 			bsp_Console_Write(xConsole, "\b\x20\b", strlen("\b\x20\b"));
 		}
-	} else if (cInputIndex < MAX_INPUT_LENGTH) {
-		pcInputString[cInputIndex] = cRxedChar;
-		cInputIndex++;
+	} else if (input_index < MAX_INPUT_LENGTH) {
+		input_str[input_index] = cRxedChar;
+		input_index++;
 		//bsp_Console_Write(xConsole, pcInputString + cInputIndex, sizeof(char));
-		if (pcInputString[0] != 0x1b)
+		if (input_str[0] != 0x1b)
 			bsp_Console_Write(xConsole, &cRxedChar, sizeof(char));
 	}
-	if (strncmp(pcInputString, "\x1b\x5b\x41", 3) == 0) {
-		strcpy(pcInputString, OldCommand);
-		cInputIndex = strlen(pcInputString);
-		bsp_Console_Write(xConsole, pcInputString,
-				strlen(pcInputString));
+	if (strncmp(input_str, "\x1b\x5b\x41", 3) == 0) {
+		strcpy(input_str, OldCommand);
+		input_index = strlen(input_str);
+		bsp_Console_Write(xConsole, input_str,
+				strlen(input_str));
 	}
-    }
+	}
 }
 
 /******************************************************************************
@@ -198,8 +204,9 @@ static void vConsoleTask(const void* pvParameters)
 static void CLI_Init()
 {
 	static const CLI_Command_Definition_t xCommandHello = {
-		"copyright",
-		"copyright:\r\n Type copyright info\r\n",
+		"info",
+		"info:"
+	    ENDL"    Type hard & soft info"ENDL,
 		(pdCOMMAND_LINE_CALLBACK)prvCopyright,
 		0
 	};
@@ -217,6 +224,7 @@ int config_timer_for_stat()
 	//FUNCTION_EMPTY(__func__);
 	return KVOK;
 }
+
 int get_run_time_counter_value()
 {
 	//FUNCTION_EMPTY(__func__);
@@ -232,19 +240,21 @@ int main(void)
 {
 	HAL_Init();
 	SystemClock_Config(FHCLK / 1000000);
-
 	bsp_LED_Init(LED1);
 	bsp_LED_Init(LED2);
 	bsp_PB_Init(BUTTON, BUTTON_MODE_GPIO);
-	//BSP_GPIO_Out_Init();
-	// This function (through FreeRTOS_CLIRegisterCommand) disable
-	// interrupts, then enabled by osKernelStart().
-	CLI_Init();
-	bsp_DAC_Init();
+	bsp_Console_Init(&Uart_Std);
+	printf(ENDL);
+	board_info();
 
-	osThreadDef(LED, vLedsTask, osPriorityNormal, 0, configMINIMAL_STACK_SIZE);
+	CLI_Init(); // This function (through FreeRTOS_CLIRegisterCommand) disable
+	            // interrupts, then enabled by osKernelStart().
+	//bsp_DAC_Init();
+	init_harmonic();
+
+	osThreadDef(LED, vLedsTask,    osPriorityNormal, 0, configMINIMAL_STACK_SIZE);
 	osThreadDef(CLI, vConsoleTask, osPriorityNormal, 0, configMINIMAL_STACK_SIZE);
-	osThreadDef(DSP, vDspTask, osPriorityNormal, 0, configMINIMAL_STACK_SIZE);
+	osThreadDef(DSP, vDspTask,     osPriorityNormal, 0, configMINIMAL_STACK_SIZE);
 
 	ThreadLEDHandle = osThreadCreate(osThread(LED), NULL);
 	ThreadCLIHandle = osThreadCreate(osThread(CLI), (void*)&Uart_Std);
