@@ -11,6 +11,7 @@
 #define SIGNAL_LEN 	1024
 #define IN_QTY		4
 #define OUT_QTY		2
+#define AFE_NAME "ADAU1372"
 
 #define REG_CLK_CONTROL                 0x0
 #define REG_PLL_CTRL0                   0x1
@@ -134,6 +135,17 @@
 #define BCLKRATE(x)             BIT(2, x)
 #define SAI_MS(x)               BIT(0, x)
 
+typedef struct {
+	uint8_t addr;
+	uint8_t value;
+} init_data_t;
+
+int afe_reg_read(int addr, int *data);
+int afe_reg_write(int addr, int data);
+int afe_init(int cnt, init_data_t *data);
+int i2c_write(int8_t chip_addr, int16_t reg_addr, int8_t data);
+int afe_register_commands();
 int sai_open(void);
+
 
 #endif /* ADAU1372_H_ */

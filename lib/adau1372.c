@@ -7,17 +7,17 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "string.h"
-#include "kvreturns.h"
-#include "afe.h"
-#include "adau1372.h"
 #include "FreeRTOS.h"
 #include "FreeRTOS_CLI.h"
 #include "stm32f4xx_hal.h"
 #include "kvgnrl.h"
+#include "afe.h"
+#include "adau1372.h"
+#include "kvreturns.h"
+#include "stdint.h"
+#include "math.h"
 
-/* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
-#define AFE_NAME "ADAU1372"
 #define SCL_PIN    GPIO_PIN_6
 #define SCL_PORT   GPIOB
 #define SDA_PIN    GPIO_PIN_9
@@ -43,13 +43,12 @@
 #define SAI1_SD_A_PIN			GPIO_PIN_4
 #define SAI1_SCK_PIN			GPIO_PIN_5
 #define SAI1_FS_PIN			GPIO_PIN_6
+#define SIGNAL_OUT_QTY                  2
+#define SAI_DMA_TX_LEN			SIGNAL_LEN * SIGNAL_OUT_QTY
 
+/* Private typedef -----------------------------------------------------------*/
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
-typedef struct {
-	uint8_t addr;
-	uint8_t value;
-} init_data_t;
 init_data_t init_data[] = {
 	{ REG_CLK_CONTROL,      CC_MDIV(0) },
 	{ REG_PLL_CTRL0,        _MSB_(1000) },
@@ -81,15 +80,23 @@ init_data_t init_data[] = {
 	{ REG_SAI_1,            BCLK_TDMC(1) | LR_MODE(0) | BCLKRATE(1) | SAI_MS(0) }
 };
 
-/* Private function prototypes -----------------------------------------------*/
-int i2c_write(int8_t chip_addr, int16_t reg_addr, int8_t data);
-int afe_reg_read(int addr, int *data);
-int afe_reg_write(int addr, int data);
-int afe_init(int cnt, init_data_t *data);
-int afe_register_commands();
-int sai_open();
+extern int16_t Harmonic[];
 
+int16_t sai_buff_tx_0[SAI_DMA_TX_LEN];
+int16_t sai_buff_tx_1[SAI_DMA_TX_LEN];
+
+/* Private function prototypes -----------------------------------------------*/
 /* Private functions ---------------------------------------------------------*/
+/*******************************************************************************
+ * @brief   Make delay for i2c interface functions.
+ ******************************************************************************/
+void i2c_delay()
+{
+	uint32_t delay = 2000;
+	while (delay--) {
+	}
+}
+
 /*******************************************************************************
  * @brief  Set SCL line to state.
  * @param  state: state to setup SCL line.
@@ -98,7 +105,8 @@ int sai_open();
 int scl_wr(int state)
 {
 	HAL_GPIO_WritePin(SCL_PORT, SCL_PIN, state);
-	kvDelay(I2C_DELAY);
+	//kvDelay(I2C_DELAY);
+	i2c_delay();
 	return KVOK;
 }
 
@@ -110,7 +118,8 @@ int scl_wr(int state)
  ******************************************************************************/
 int sda_rd()
 {
-	kvDelay(I2C_DELAY);
+//	kvDelay(I2C_DELAY);
+	i2c_delay();
 	return HAL_GPIO_ReadPin(SDA_PORT, SDA_PIN);
 }
 
@@ -122,7 +131,8 @@ int sda_rd()
 int sda_wr(int state)
 {
 	HAL_GPIO_WritePin(SDA_PORT, SDA_PIN, state & 1);
-	kvDelay(I2C_DELAY);
+//	kvDelay(I2C_DELAY);
+	i2c_delay();
 	return KVOK;
 }
 
@@ -276,6 +286,19 @@ int i2c_write(int8_t chip_addr, int16_t reg_addr, int8_t data)
 	i2c_byte_wr(data);		// Data byte.
 	i2c_ack_slave();
 	i2c_stop();
+	return KVOK;
+}
+
+/*******************************************************************************
+ * @brief    Initialize signals (output and, may be input).
+ ******************************************************************************/
+int afe_init_signals()
+{
+	//sai_buff_tx_0[0] = 0x8000;
+	for (int i = 0; i < SIGNAL_LEN; i++) {
+		sai_buff_tx_0[i * 2 + 0] = 0x8000;//x8055;
+		sai_buff_tx_0[i * 2 + 1] = 0xA000;//0x8055;
+	}
 	return KVOK;
 }
 
@@ -444,46 +467,74 @@ int afe_register_commands()
  * @param  None.
  * @retval KV status.
  ******************************************************************************/
+#define DMA_Stream_SAI1B DMA2_Stream5
 int sai_open(void)
 {
-
-	//SAI_HandleTypeDef _SAIHandle, *SAI_Handle = &_SAIHandle;
-	//SAI_Handle->Instance =
-	//HAL_SAI_Init
 	SAI1_GPIO_CLK_ENABLE();
 	SAI1_CLOCK_ENABLE();
 	GPIOE->MODER  |= 0b1010101010 << 2 * 2;		// Alt fun for PE2,3,4,5,6
 	GPIOE->AFR[0] |= SAI1_AFRL_VALUE;
 	SAI1_Block_A->CR1 = 0b00000000000000000000000010000001; // Block_A - master receiver
-	SAI1_Block_B->CR1 = 0b00000000000000000000010010000010; /* Block_B - slave transmitter
-	                              ||||| ||  ||||||||| ||++-- MODE
-	                              ||||| ||  ||||||||| ++---- PRTCFG
-	                              ||||| ||  ||||||+++------- DS (16 bit)
-	                              ||||| ||  |||||+---------- LSBFIRST
-	                              ||||| ||  ||||+----------- CKSTR
-	                              ||||| ||  ||++------------ SYNCEN (A - async, B - sync)
-	                              ||||| ||  |+-------------- MONO
-	                              ||||| ||  +--------------- OUTDRIV
-	                              ||||| |+------------------ SAIxEN
-	                              ||||| +------------------- DMAEN
-	                              ||||+--------------------- NODIV
-	                              ++++---------------------- MCKDIV = 0 */
-	SAI1_Block_A->FRCR = 0b00000000000000000001111100111111;
-	SAI1_Block_B->FRCR = 0b00000000000000000001111100111111;  /*
-                                            ||| |||||||++++++++-- FRL
-                                            ||| +++++++---------- FSALL
-                                            ||+------------------ FSDEF
-                                            |+------------------- FSPOL
-                                            +-------------------- FSOFF */
-	SAI1_Block_A->SLOTR = 0b00000000000000110000000110000000;
-	SAI1_Block_B->SLOTR = 0b00000000000000110000000110000000;  /*
-	                        ||||||||||||||||    |||||| +++++-- FBOFF
-	                        ||||||||||||||||    ||||++-------- SLOTSZ
-	                        ||||||||||||||||    ++++---------- NBSLOT
-	                        ++++++++++++++++------------------ SLOTEN  */
+	SAI1_Block_B->CR1 = 0b00000000000000100000010010000010; // Block_B - slave transmitter
+	                    //        ||||| ||  ||||||||| ||++-- MODE
+	                    //        ||||| ||  ||||||||| ++---- PRTCFG
+	                    //        ||||| ||  ||||||+++------- DS (16 bit)
+	                    //        ||||| ||  |||||+---------- LSBFIRST
+	                    //        ||||| ||  ||||+----------- CKSTR
+	                    //        ||||| ||  ||++------------ SYNCEN (A - async, B - sync)
+	                    //        ||||| ||  |+-------------- MONO
+	                    //        ||||| ||  +--------------- OUTDRIV
+	                    //        ||||| |+------------------ SAIxEN
+	                    //        ||||| +------------------- DMAEN
+	                    //        ||||+--------------------- NODIV
+	                    //        ++++---------------------- MCKDIV = 0 (MCLK/FS = 256 always
+	SAI1_Block_B->CR2 = 0b00000000000000000000000000000010;
+	                    //                             +++  FTH 010 - 1/2 FIFO
+
+	SAI1_Block_A->FRCR = 0b00000000000000000000000000111111;
+	SAI1_Block_B->FRCR = 0b00000000000000000000000000111111;
+                             //             ||| |||||||++++++++-- FRL (Frame Length = 64)
+                             //             ||| +++++++---------- FSALL
+                             //             ||+------------------ FSDEF
+                             //             |+------------------- FSPOL
+                             //             +-------------------- FSOFF
+	SAI1_Block_A->SLOTR = 0b00000000000011110000001101000000;
+	SAI1_Block_B->SLOTR = 0b00000000000000110000001101000000;
+	                      //||||||||||||||||    |||||| +++++-- FBOFF
+	                      //||||||||||||||||    ||||++-------- SLOTSZ
+	                      //||||||||||||||||    ++++---------- NBSLOT
+	                      //++++++++++++++++------------------ SLOTEN  */
 	SAI1_Block_B->CR1 |= SAI_xCR1_SAIEN; // Slave enable first before master.
 	SAI1_Block_A->CR1 |= SAI_xCR1_SAIEN;
-	SAI1_Block_B->DR = 0x5555;
 
+	__HAL_RCC_DMA2_CLK_ENABLE();
+	DMA_Stream_SAI1B->CR = DMA_CHANNEL_0 | DMA_PRIORITY_VERY_HIGH | DMA_SxCR_DBM |
+	                       DMA_SxCR_MINC | DMA_SxCR_CIRC | DMA_MEMORY_TO_PERIPH |
+	                       DMA_SxCR_MSIZE_0 | DMA_SxCR_PSIZE_0;
+	DMA_Stream_SAI1B->FCR = 0;
+	DMA_Stream_SAI1B->PAR =  (uint32_t)&SAI1_Block_B->DR;
+	DMA_Stream_SAI1B->M0AR = (uint32_t)sai_buff_tx_0;
+	DMA_Stream_SAI1B->M1AR = (uint32_t)sai_buff_tx_1;
+	DMA_Stream_SAI1B->NDTR = SAI_DMA_TX_LEN;
+	DMA_Stream_SAI1B->CR |= DMA_SxCR_EN;
+
+	return KVOK;
+}
+
+/*******************************************************************************
+ * @brief    Setup output signals.
+ ******************************************************************************/
+int afe_signals_set(int step0, int step1, int mode)
+{
+	uint16_t ind0, ind1;
+	for (int i = 0; i < SIGNAL_LEN; i++) {
+		ind0 = i * step0 % SIGNAL_LEN;
+		ind1 = i * step1 % SIGNAL_LEN;
+//		sai_buff_tx_0[i * 2 + 0] = (int)(sin(2 * M_PI * i / SIGNAL_LEN) * 32767);
+		sai_buff_tx_0[i * 2 + 0] = Harmonic[ind0];
+		sai_buff_tx_0[i * 2 + 1] = Harmonic[ind1];
+		sai_buff_tx_1[i * 2 + 0] = Harmonic[ind1];
+		sai_buff_tx_1[i * 2 + 1] = Harmonic[ind0];
+	}
 	return KVOK;
 }

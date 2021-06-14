@@ -34,7 +34,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <sys/times.h>
-
+#include "config.h"
 
 /* Variables */
 //#undef errno
@@ -90,16 +90,34 @@ int _read (int file, char *ptr, int len)
 return len;
 }
 
+#define IO_PUTCHAR_VER	1
+#if IO_PUTCHAR_VER == 1
 int _write(int file, char *ptr, int len)
 {
 	int DataIdx;
 
-	for (DataIdx = 0; DataIdx < len; DataIdx++)
-	{
-		__io_putchar(*ptr++);
+	for (DataIdx = 0; DataIdx < len; DataIdx++) {
+		__io_putchar(*ptr++); // Todo Kvarta: Think about wrong return value.
 	}
 	return len;
 }
+#elif IO_PUTCHAR_VER == 2
+int _write(int file, char *ptr, int len)
+{
+	int DataIdx, lencntr = 0;
+
+	for (DataIdx = 0; DataIdx < len; DataIdx++)
+	{
+		if (__io_putchar(*ptr) == *ptr) {
+			lencntr++;
+			ptr++;
+		} else {
+			return lencntr;
+		}
+	}
+	return lencntr;
+}
+#endif
 
 caddr_t _sbrk(int incr)
 {

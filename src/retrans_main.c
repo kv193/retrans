@@ -15,10 +15,12 @@
 #include "stamen_bsp.h"
 #include "config.h"
 #include "kvgnrl.h"
-//#include "FreeRTOS_IO.h"
+#include "FreeRTOSConfig.h"
 #include "afe.h"
 #include "stm32f4xx_ll_cortex.h"
 #include "adau1372.h"
+#include "cmsis_os.h"
+#include "neva.h"
 
 /* Private typedef -----------------------------------------------------------*/
 /* Private define ------------------------------------------------------------*/
@@ -45,10 +47,12 @@ static void vLedsTask(void const *argument);
  ******************************************************************************/
 void board_info()
 {
-	printf("%s-%x.%x for %s-%x.%x, %s, %s"ENDL,
+	int ret;
+	ret = print_f("%s-%x.%x for %s-%x.%x, %s, %s"ENDL,
 		SOFTWARE_NAME, _MAJ_(SOFTWARE_VERSION), _MIN_(SOFTWARE_VERSION),
 		HARDWARE_NAME, _MAJ_(HARDWARE_VERSION), _MIN_(HARDWARE_VERSION),
 		__DATE__, __TIME__);
+	UNUSED(ret);
 }
 
 /*******************************************************************************
@@ -59,7 +63,8 @@ void copyright()
 	printf("(c) 2021 Techtrans, kv193@yandex.ru"ENDL);
 }
 
-/* Private functions ---------------------------------------------------------*/
+/********************* Private functions *************************************/
+
 /******************************************************************************
  * @brief  Toggle LED1 thread 1
  * @param  thread not used
@@ -72,7 +77,6 @@ static void vLedsTask(void const *argument)
 		osDelay(LED1_Delay);
 	}
 }
-
 
 #ifdef  USE_FULL_ASSERT
 /**
@@ -99,13 +103,31 @@ void assert_failed(uint8_t *file, uint32_t line)
   * @param  xWriteBufferLen: length of output buffer.
   * @retval pdFALSE that mean end of the output.
   ****************************************************************************/
-static BaseType_t prvCopyright(int8_t *pcWriteBuffer,
+static BaseType_t cmd_info(int8_t *pcWriteBuffer,
                                           size_t xWriteBufferLen,
                                           const int8_t *pcCommandString)
 {
 	board_info();
 	copyright();
 	pcWriteBuffer[0] = 0;
+	return pdFALSE;
+}
+
+/******************************************************************************
+  * @brief  General test function.
+  ****************************************************************************/
+static BaseType_t cmd_test(int8_t *pcWriteBuffer,
+                                          size_t xWriteBufferLen,
+                                          const char *pcCommandString)
+{
+	BaseType_t x;
+	uint16_t step0, step1;
+	pcWriteBuffer[0] = 0;
+
+	step0 = strtoll(FreeRTOS_CLIGetParameter(pcCommandString, 1, &x), NULL, 10);
+	step1 = strtoll(FreeRTOS_CLIGetParameter(pcCommandString, 2, &x), NULL, 10);
+	afe_signals_set(step0, step1, 0);
+
 	return pdFALSE;
 }
 
@@ -116,8 +138,11 @@ static BaseType_t prvCopyright(int8_t *pcWriteBuffer,
  ******************************************************************************/
 int __io_putchar(int ch)
 {
-	HAL_UART_Transmit(&Uart_Std, (uint8_t *)&ch, 1, 0xFFFF);
-	return ch;
+	if (HAL_UART_Transmit(&Uart_Std, (uint8_t *)&ch, 1, 0xFFFF) != HAL_OK) {
+		return EOF;
+	} else {
+		return ch;
+	}
 }
 
 int __io_getchar(void)
@@ -129,16 +154,22 @@ int __io_getchar(void)
 /*******************************************************************************
  * @brief DSP Task
  ******************************************************************************/
+#define DSP_TASK_PERIOD 1
 static void vDspTask(void const *pvPars)
 {
-	static int cntr = 0;
-	(void)cntr;
-	if (afe_open("ADAU1372") != KVOK)
-		Error_Handler();
+	static uint32_t Cntr1ms = 0;
+	static uint32_t CntrCycle = 0;
 	for(;;){
-		HAL_Delay(1000);
-//		printf("DSP Task iterate: cntr = %d\r\n", cntr++);
+		osDelay(DSP_TASK_PERIOD); // Blocking delay instead HAL_Delay().
+		Cntr1ms++;
+		CntrCycle++;
 
+		generator_tu();
+		//generator_ts();
+		//filters_tu();
+		//filters_ts();
+		//decoder_tu();
+		//decoders_ts();
 	}
 }
 
@@ -150,14 +181,18 @@ static void vConsoleTask(const void* pvParameters)
 	void 		*xConsole = (void*)pvParameters;
 	int8_t 		cRxedChar, input_index = 0;
 	BaseType_t 	xMoreDataToFollow;
-	static char   	output_str[MAX_OUTPUT_LENGTH],
+	static char   	//output_str[MAX_OUTPUT_LENGTH],
+			*output_str,
 			input_str[MAX_INPUT_LENGTH],
 			OldCommand[MAX_INPUT_LENGTH];
 
-	bsp_Console_Write(xConsole, pcWelcomeMessage, strlen( pcWelcomeMessage));
+	output_str = FreeRTOS_CLIGetOutputBuffer();
+
+	bsp_Console_Write(xConsole, pcWelcomeMessage, strlen( pcWelcomeMessage)); // Todo Kvarta: make nonblocking uart transmit it.
 
 	for( ;; ) {
 	while (0 == bsp_Console_Read(xConsole, &cRxedChar, sizeof(cRxedChar))) {
+		osDelay(10);
 	}
 	if (cRxedChar == '\n' || cRxedChar == '\r') {
 		bsp_Console_Write(xConsole, "\r\n", strlen("\r\n"));
@@ -203,15 +238,26 @@ static void vConsoleTask(const void* pvParameters)
   ****************************************************************************/
 static void CLI_Init()
 {
-	static const CLI_Command_Definition_t xCommandHello = {
-		"info",
-		"info:"
-	    ENDL"    Type hard & soft info"ENDL,
-		(pdCOMMAND_LINE_CALLBACK)prvCopyright,
-		0
+	static const CLI_Command_Definition_t cmd[] = {
+		{
+			"info",
+			"info:" ENDL
+			"    Type hard & soft info" ENDL,
+			(pdCOMMAND_LINE_CALLBACK)cmd_info,
+			0
+		},
+		{
+			"test",
+			"test:" ENDL
+			"    Some test function" ENDL,
+			(pdCOMMAND_LINE_CALLBACK)cmd_test,
+			-1
+		}
 	};
 
-	FreeRTOS_CLIRegisterCommand(&xCommandHello);
+	for (int i = 0; i < ARRAY_SIZE(cmd); i++) {
+		FreeRTOS_CLIRegisterCommand(&cmd[i]);
+	}
 
 }
 
@@ -231,21 +277,21 @@ int get_run_time_counter_value()
 	return HAL_GetTick();
 }
 
-/*******************************************************************************
- * @brief  Main function
- * @param  None
+/******************************************************************************
+ * @brief  Toggle LED1 thread 1
+ * @param  thread not used
  * @retval None
  ******************************************************************************/
-int main(void)
+/*static void vMainTask(void const *argument)
 {
-	HAL_Init();
-	SystemClock_Config(FHCLK / 1000000);
 	bsp_LED_Init(LED1);
 	bsp_LED_Init(LED2);
 	bsp_PB_Init(BUTTON, BUTTON_MODE_GPIO);
-	bsp_Console_Init(&Uart_Std);
-	printf(ENDL);
+
+	bsp_Console_Init(&Uart_Std); printf(ENDL);
 	board_info();
+	afe_open(AFE_NAME);
+	bsp_init_afe();
 
 	CLI_Init(); // This function (through FreeRTOS_CLIRegisterCommand) disable
 	            // interrupts, then enabled by osKernelStart().
@@ -260,6 +306,88 @@ int main(void)
 	ThreadCLIHandle = osThreadCreate(osThread(CLI), (void*)&Uart_Std);
 	ThreadDSPHandle = osThreadCreate(osThread(DSP), NULL);
 
+	for (;;) {
+	}
+}*/
+
+/*******************************************************************************
+* @brief  Initializes the Global MSP.
+* @note   This function is called from HAL_Init() function to perform system
+*         level initialization (GPIOs, clock, DMA, interrupt).
+* @retval None
+*******************************************************************************/
+void HAL_MspInit(void)
+{
+	HAL_UART_MspInit(NULL);
+}
+
+/*******************************************************************************
+* @brief  DeInitializes the Global MSP.
+* @note   This functiona is called from HAL_DeInit() function to perform system
+*         level de-initialization (GPIOs, clock, DMA, interrupt).
+* @retval None
+*******************************************************************************/
+void HAL_MspDeInit(void)
+{
+
+}
+
+/*******************************************************************************
+* @brief  Initializes the PPP MSP.
+* @note   This functiona is called from HAL_PPP_Init() function to perform
+*         peripheral(PPP) system level initialization (GPIOs, clock, DMA, interrupt)
+* @retval None
+*******************************************************************************/
+void HAL_PPP_MspInit(void)
+{
+
+}
+
+/*******************************************************************************
+* @brief  DeInitializes the PPP MSP.
+* @note   This functiona is called from HAL_PPP_DeInit() function to perform
+*         peripheral(PPP) system level de-initialization (GPIOs, clock, DMA, interrupt)
+* @retval None
+*******************************************************************************/
+void HAL_PPP_MspDeInit(void)
+{
+
+}
+
+/*******************************************************************************
+ * @brief  Main function
+ * @param  None
+ * @retval None
+ ******************************************************************************/
+int main(void)
+{
+	HAL_Init();
+	SystemClock_Config(FHCLK / 1000000);
+
+	bsp_LED_Init(LED1);
+	bsp_LED_Init(LED2);
+	bsp_PB_Init(BUTTON, BUTTON_MODE_GPIO);
+
+	osKernelInitialize();
+
+	bsp_Console_Init(&Uart_Std); printf(ENDL);
+	board_info();
+	bsp_init_afe(); //bsp_DAC_Init();
+
+	CLI_Init(); // This function (through FreeRTOS_CLIRegisterCommand) disable interrupts, then enabled by osKernelStart().
+	init_harmonic();
+
+	osThreadDef(LED, vLedsTask,    osPriorityNormal, 0, configMINIMAL_STACK_SIZE);
+	osThreadDef(CLI, vConsoleTask, osPriorityNormal, 0, configMINIMAL_STACK_SIZE);
+	osThreadDef(DSP, vDspTask,     osPriorityNormal, 0, configMINIMAL_STACK_SIZE);
+
+	ThreadLEDHandle = osThreadCreate(osThread(LED), NULL);
+	ThreadCLIHandle = osThreadCreate(osThread(CLI), (void*)&Uart_Std);
+	ThreadDSPHandle = osThreadCreate(osThread(DSP), NULL);
+
+/*	osThreadDef(Main, vMainTask,     osPriorityNormal, 0, configMINIMAL_STACK_SIZE);
+	ThreadLEDHandle = osThreadCreate(osThread(Main), NULL);
+*/
 	osKernelStart();
 	for (;;);
 }
